@@ -16,7 +16,7 @@ const validateObjectId = (req, res, next) => {
 
 // Middleware to validate product data
 const validateProduct = async (req, res, next) => {
-  const { name, description, price, categoryId, brandId } = req.body;
+  const { name, description, price, categoryId } = req.body;
 
   const errors = [];
 
@@ -39,16 +39,6 @@ const validateProduct = async (req, res, next) => {
     const categoryExists = await Category.findById(categoryId);
     if (!categoryExists) {
       errors.push("Category does not exist");
-    }
-  }
-
-  if (!brandId || !mongoose.Types.ObjectId.isValid(brandId)) {
-    errors.push("Valid brand ID is required");
-  } else {
-    // Check if brand exists
-    const brandExists = await Brand.findById(brandId);
-    if (!brandExists) {
-      errors.push("Brand does not exist");
     }
   }
 

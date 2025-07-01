@@ -1,4 +1,5 @@
 const Category = require('../models/Category');
+const Brand = require('../models/Brand');
 
 // Get all categories
 const getAllCategories = async (req, res) => {
@@ -73,7 +74,7 @@ const getCategoryById = async (req, res) => {
 // Create new category (Admin only)
 const createCategory = async (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { name, description, brand } = req.body;
 
     // Check if category already exists
     const existingCategory = await Category.findOne({ name: { $regex: new RegExp(`^${name}$`, 'i') } });
@@ -86,10 +87,16 @@ const createCategory = async (req, res) => {
 
     const category = new Category({
       name,
-      description
+      description,
+      brand
     });
 
     const savedCategory = await category.save();
+
+    // Push category _id to brand's categories array
+    await Brand.findByIdAndUpdate(brand, {
+      $push: { categories: savedCategory._id }
+    });
 
     res.status(201).json({
       success: true,

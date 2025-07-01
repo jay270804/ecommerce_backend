@@ -13,7 +13,7 @@ const productSchema = new mongoose.Schema(
     },
     description: {
       type: String,
-      required: true,
+      required: false,
       trim: true,
     },
     coverImage: {
@@ -48,11 +48,6 @@ const productSchema = new mongoose.Schema(
       type: mongoose.Types.ObjectId,
       required: true,
       ref: "Category",
-    },
-    brandId: {
-      type: mongoose.Types.ObjectId,
-      required: true,
-      ref: "Brand",
     },
     isActive: {
       type: Boolean,

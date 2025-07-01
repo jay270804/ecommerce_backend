@@ -2,6 +2,7 @@ const Product = require('../models/Product');
 const { deleteFile, extractFilenameFromUrl, getFileUrl } = require('../config/upload');
 const { generateProductImages, deleteProductImages, createSrcSet } = require('../utils/imageProcessor');
 const { successResponse, errorResponse, validationErrorResponse, notFoundResponse } = require('../utils/response');
+const Category = require('../models/Category');
 
 // DB should be accessed only at this layer not on routes layer.
 // Get all products with filtering and pagination
@@ -11,7 +12,6 @@ const getAllProducts = async (req, res) => {
       page = 1,
       limit = 10,
       categoryId,
-      brandId,
       minPrice,
       maxPrice,
       sortBy = 'createdAt',
@@ -22,7 +22,6 @@ const getAllProducts = async (req, res) => {
     // Build filter object
     const filter = { isActive: true };
     if (categoryId) filter.categoryId = categoryId;
-    if (brandId) filter.brandId = brandId;
     if (minPrice || maxPrice) {
       filter.price = {};
       if (minPrice) filter.price.$gte = parseFloat(minPrice);
@@ -46,7 +45,6 @@ const getAllProducts = async (req, res) => {
     // Execute query with filtering, sorting, and pagination
     const products = await Product.find(filter)
       .populate('categoryId', 'name')
-      .populate('brandId', 'name')
       .sort(sort)
       .skip(skip)
       .limit(parseInt(limit));
@@ -85,8 +83,7 @@ const getAllProducts = async (req, res) => {
 const getProductById = async (req, res) => {
   try {
     const product = await Product.findById(req.params.id)
-      .populate('categoryId', 'name')
-      .populate('brandId', 'name');
+      .populate('categoryId', 'name');
 
     if (!product) {
       return notFoundResponse(res, 'Product not found');
@@ -111,7 +108,7 @@ const getProductById = async (req, res) => {
 // Create new product
 const createProduct = async (req, res) => {
   try {
-    const { name, summary, description, stockUnit, price, discountPercentage, categoryId, brandId, tags } = req.body;
+    const { name, summary, description, stockUnit, price, discountPercentage, categoryId, tags } = req.body;
 
     // Handle multiple image uploads
     let coverImage = '';
@@ -148,8 +145,8 @@ const createProduct = async (req, res) => {
     }
 
     // Validate required fields
-    if (!name || !description || !coverImage || !price || !categoryId || !brandId) {
-      return validationErrorResponse(res, ['Missing required fields: name, description, coverImage, price, categoryId, brandId']);
+    if (!name || !description || !coverImage || !price || !categoryId) {
+      return validationErrorResponse(res, ['Missing required fields: name, description, coverImage, price, categoryId']);
     }
 
     // Validate price
@@ -172,11 +169,15 @@ const createProduct = async (req, res) => {
       price,
       discountPercentage: discountPercentage || 0,
       categoryId,
-      brandId,
       tags: tags ? JSON.parse(tags) : []
     });
 
     const savedProduct = await product.save();
+
+    // Push product _id to category's products array
+    await Category.findByIdAndUpdate(categoryId, {
+      $push: { products: savedProduct._id }
+    });
 
     // Add responsive image URLs to response
     const productObj = savedProduct.toObject();
@@ -204,7 +205,7 @@ const createProduct = async (req, res) => {
 // Update product
 const updateProduct = async (req, res) => {
   try {
-    const { name, summary, description, stockUnit, price, discountPercentage, categoryId, brandId, tags, isActive } = req.body;
+    const { name, summary, description, stockUnit, price, discountPercentage, categoryId, tags, isActive } = req.body;
 
     const currentProduct = await Product.findById(req.params.id);
     if (!currentProduct) {
@@ -274,12 +275,11 @@ const updateProduct = async (req, res) => {
         price,
         discountPercentage,
         categoryId,
-        brandId,
         tags: tags ? JSON.parse(tags) : currentProduct.tags,
         isActive
       },
       { new: true, runValidators: true }
-    ).populate('categoryId', 'name').populate('brandId', 'name');
+    ).populate('categoryId', 'name');
 
     // Add responsive image URLs to response
     const productObj = updatedProduct.toObject();
@@ -329,7 +329,6 @@ const deleteProduct = async (req, res) => {
 const getFilterMetadata = async (req, res) => {
   try {
     const categories = await Product.distinct('categoryId');
-    const brands = await Product.distinct('brandId');
 
     // Get price range
     const priceStats = await Product.aggregate([
@@ -345,7 +344,6 @@ const getFilterMetadata = async (req, res) => {
 
     return successResponse(res, {
       categories: categories.sort(),
-      brands: brands.sort(),
       priceRange: priceStats[0] || { minPrice: 0, maxPrice: 0 }
     }, 'Filter metadata fetched successfully');
   } catch (error) {
