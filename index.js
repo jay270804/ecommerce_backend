@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const connectDB = require('./config/database');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 
@@ -13,8 +14,40 @@ connectDB();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-// Serve static files from uploads directory
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Rate limiting middleware
+const publicLimiter = rateLimit({
+  windowMs: 1000, // 1 second
+  max: 20, // 20 requests per second per IP for public GETs
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many requests from this IP, please try again later.'
+  }
+});
+const strictLimiter = rateLimit({
+  windowMs: 1000, // 1 second
+  max: 5, // 5 requests per second per IP for sensitive routes
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many requests from this IP, please try again later.'
+  }
+});
+
+// Apply publicLimiter to public GET routes
+app.use('/api/products', publicLimiter);
+app.use('/api/categories', publicLimiter);
+app.use('/api/brands', publicLimiter);
+
+// Apply strictLimiter to sensitive/auth/write routes
+app.use('/api/auth', strictLimiter);
+app.use('/api/users', strictLimiter);
+app.use('/api/orders', strictLimiter);
+app.use('/api/payments', strictLimiter);
+app.use('/api/addresses', strictLimiter);
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));

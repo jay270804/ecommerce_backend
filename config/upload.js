@@ -1,18 +1,4 @@
 const multer = require('multer');
-const path = require('path');
-const { v4: uuidv4 } = require('uuid');
-const fs = require('fs');
-
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, '../uploads');
-const productsDir = path.join(uploadsDir, 'products');
-
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-if (!fs.existsSync(productsDir)) {
-  fs.mkdirSync(productsDir, { recursive: true });
-}
 
 // Image validation configuration
 const IMAGE_CONFIG = {
@@ -29,72 +15,17 @@ const isImageFile = (mimetype) => {
   return IMAGE_CONFIG.allowedTypes.includes(mimetype);
 };
 
-// Validate image dimensions
-const validateImageDimensions = (file) => {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const { width, height } = img;
-      const aspectRatio = width / height;
-
-      // Check minimum dimensions
-      if (width < IMAGE_CONFIG.minDimensions.width || height < IMAGE_CONFIG.minDimensions.height) {
-        reject(new Error(`Image dimensions too small. Minimum: ${IMAGE_CONFIG.minDimensions.width}x${IMAGE_CONFIG.minDimensions.height}`));
-        return;
-      }
-
-      // Check maximum dimensions
-      if (width > IMAGE_CONFIG.maxDimensions.width || height > IMAGE_CONFIG.maxDimensions.height) {
-        reject(new Error(`Image dimensions too large. Maximum: ${IMAGE_CONFIG.maxDimensions.width}x${IMAGE_CONFIG.maxDimensions.height}`));
-        return;
-      }
-
-      // Check aspect ratio
-      if (aspectRatio < IMAGE_CONFIG.aspectRatio.min || aspectRatio > IMAGE_CONFIG.aspectRatio.max) {
-        reject(new Error(`Aspect ratio not allowed. Must be between ${IMAGE_CONFIG.aspectRatio.min} and ${IMAGE_CONFIG.aspectRatio.max}`));
-        return;
-      }
-
-      resolve({ width, height, aspectRatio });
-    };
-
-    img.onerror = () => {
-      reject(new Error('Invalid image file'));
-    };
-
-    img.src = URL.createObjectURL(file);
-  });
-};
-
-// Configure storage
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, productsDir);
-  },
-  filename: (req, file, cb) => {
-    // Generate unique filename with original extension
-    const fileExtension = path.extname(file.originalname);
-    const fileName = `${uuidv4()}${fileExtension}`;
-    cb(null, fileName);
-  }
-});
-
 // Enhanced file filter with validation
 const fileFilter = (req, file, cb) => {
-  // Check file type
   if (!isImageFile(file.mimetype)) {
     return cb(new Error('Only JPEG, PNG, and WebP images are allowed!'), false);
   }
-
-  // Check file size
-  if (file.size > IMAGE_CONFIG.maxSize) {
-    return cb(new Error(`File size too large. Maximum: ${IMAGE_CONFIG.maxSize / (1024 * 1024)}MB`), false);
-  }
-
   cb(null, true);
 };
 
-// Configure multer for single file
+// Use memory storage for multer
+const storage = multer.memoryStorage();
+
 const upload = multer({
   storage: storage,
   limits: {
@@ -103,7 +34,6 @@ const upload = multer({
   fileFilter: fileFilter
 });
 
-// Configure multer for multiple files
 const uploadMultiple = multer({
   storage: storage,
   limits: {
@@ -113,40 +43,9 @@ const uploadMultiple = multer({
   fileFilter: fileFilter
 });
 
-// Function to get file URL
-const getFileUrl = (filename) => {
-  return `/uploads/products/${filename}`;
-};
-
-// Function to delete file
-const deleteFile = (filename) => {
-  const filePath = path.join(productsDir, filename);
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
-  }
-};
-
-// Function to extract filename from URL
-const extractFilenameFromUrl = (url) => {
-  if (!url) return null;
-  return path.basename(url);
-};
-
-// TODO: Add image compression and resizing
-// const compressAndResizeImage = async (filePath, options = {}) => {
-//   // This will be implemented when sharp is added
-//   // For now, return the original file path
-//   return filePath;
-// };
-
 module.exports = {
   upload,
   uploadMultiple,
-  getFileUrl,
-  deleteFile,
-  extractFilenameFromUrl,
-  productsDir,
   isImageFile,
-  IMAGE_CONFIG,
-  validateImageDimensions
+  IMAGE_CONFIG
 };
