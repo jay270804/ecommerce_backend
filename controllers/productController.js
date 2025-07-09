@@ -1,8 +1,32 @@
 const Product = require('../models/Product');
-const { deleteFile, extractFilenameFromUrl, getFileUrl } = require('../config/upload');
-const { generateProductImages, deleteProductImages, createSrcSet } = require('../utils/imageProcessor');
-const { successResponse, errorResponse, validationErrorResponse, notFoundResponse } = require('../utils/response');
 const Category = require('../models/Category');
+const { successResponse, errorResponse, validationErrorResponse, notFoundResponse } = require('../utils/response');
+const { processImageBuffer } = require('../utils/imageProcessor');
+const { v4: uuidv4 } = require('uuid');
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+
+// Configure the S3 client
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
+
+// Helper to upload a buffer to S3 and return the public URL
+const uploadBufferToS3 = async (buffer, mimetype, folder = 'products') => {
+  const ext = mimetype.split('/')[1] || 'jpg';
+  const key = `${folder}/${uuidv4()}.${ext}`;
+  const command = new PutObjectCommand({
+    Bucket: process.env.AWS_S3_BUCKET_NAME,
+    Key: key,
+    Body: buffer,
+    ContentType: mimetype,
+  });
+  await s3Client.send(command);
+  return `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+};
 
 // DB should be accessed only at this layer not on routes layer.
 // Get all products with filtering and pagination
@@ -49,17 +73,8 @@ const getAllProducts = async (req, res) => {
       .skip(skip)
       .limit(parseInt(limit));
 
-    // Add responsive image URLs to products
-    const productsWithImages = products.map(product => {
-      const productObj = product.toObject();
-      if (productObj.coverImage) {
-        productObj.coverImageSizes = createSrcSet(productObj.coverImage);
-      }
-      if (productObj.images && productObj.images.length > 0) {
-        productObj.imagesSizes = productObj.images.map(img => createSrcSet(img));
-      }
-      return productObj;
-    });
+    // Remove responsive image URL logic
+    const productsWithImages = products.map(product => product.toObject());
 
     const totalProducts = await Product.countDocuments(filter);
     const totalPages = Math.ceil(totalProducts / parseInt(limit));
@@ -89,14 +104,8 @@ const getProductById = async (req, res) => {
       return notFoundResponse(res, 'Product not found');
     }
 
-    // Add responsive image URLs
+    // Remove responsive image URL logic
     const productObj = product.toObject();
-    if (productObj.coverImage) {
-      productObj.coverImageSizes = createSrcSet(productObj.coverImage);
-    }
-    if (productObj.images && productObj.images.length > 0) {
-      productObj.imagesSizes = productObj.images.map(img => createSrcSet(img));
-    }
 
     return successResponse(res, productObj, 'Product fetched successfully');
   } catch (error) {
@@ -110,37 +119,27 @@ const createProduct = async (req, res) => {
   try {
     const { name, summary, description, stockUnit, price, discountPercentage, categoryId, tags } = req.body;
 
-    // Handle multiple image uploads
     let coverImage = '';
     let additionalImages = [];
 
-    // Process cover image
+    // Process cover image (file upload)
     if (req.files && req.files.coverImage && req.files.coverImage[0]) {
-      try {
-        const imageSizes = await generateProductImages(req.files.coverImage[0].path, req.files.coverImage[0].filename);
-        coverImage = imageSizes.original;
-      } catch (error) {
-        console.error('Error processing cover image:', error);
-        return errorResponse(res, 'Error processing cover image', 400);
-      }
+      const file = req.files.coverImage[0];
+      // In-memory processing (compression)
+      const processedBuffer = await processImageBuffer(file.buffer, { format: 'jpeg', quality: 85 });
+      coverImage = await uploadBufferToS3(processedBuffer, 'image/jpeg');
     } else if (req.body.coverImage) {
-      // If image URL is provided in JSON body
       coverImage = req.body.coverImage;
     }
 
-    // Process additional images
+    // Process additional images (file upload)
     if (req.files && req.files.images && req.files.images.length > 0) {
-      try {
-        for (const file of req.files.images) {
-          const imageSizes = await generateProductImages(file.path, file.filename);
-          additionalImages.push(imageSizes.original);
-        }
-      } catch (error) {
-        console.error('Error processing additional images:', error);
-        return errorResponse(res, 'Error processing additional images', 400);
+      for (const file of req.files.images) {
+        const processedBuffer = await processImageBuffer(file.buffer, { format: 'jpeg', quality: 85 });
+        const imageUrl = await uploadBufferToS3(processedBuffer, 'image/jpeg');
+        additionalImages.push(imageUrl);
       }
     } else if (req.body.images) {
-      // If image URLs are provided in JSON body
       additionalImages = JSON.parse(req.body.images);
     }
 
@@ -148,13 +147,9 @@ const createProduct = async (req, res) => {
     if (!name || !description || !coverImage || !price || !categoryId) {
       return validationErrorResponse(res, ['Missing required fields: name, description, coverImage, price, categoryId']);
     }
-
-    // Validate price
     if (price <= 0) {
       return validationErrorResponse(res, ['Price must be greater than 0']);
     }
-
-    // Validate discount percentage
     if (discountPercentage && (discountPercentage < 0 || discountPercentage > 100)) {
       return validationErrorResponse(res, ['Discount percentage must be between 0 and 100']);
     }
@@ -173,31 +168,14 @@ const createProduct = async (req, res) => {
     });
 
     const savedProduct = await product.save();
-
-    // Push product _id to category's products array
-    await Category.findByIdAndUpdate(categoryId, {
-      $push: { products: savedProduct._id }
-    });
-
-    // Add responsive image URLs to response
-    const productObj = savedProduct.toObject();
-    if (productObj.coverImage) {
-      productObj.coverImageSizes = createSrcSet(productObj.coverImage);
-    }
-    if (productObj.images && productObj.images.length > 0) {
-      productObj.imagesSizes = productObj.images.map(img => createSrcSet(img));
-    }
-
-    return successResponse(res, productObj, 'Product created successfully', 201);
+    await Category.findByIdAndUpdate(categoryId, { $push: { products: savedProduct._id } });
+    return successResponse(res, savedProduct, 'Product created successfully', 201);
   } catch (error) {
     console.error('Error creating product:', error);
-
-    // Handle validation errors
     if (error.name === 'ValidationError') {
       const validationErrors = Object.values(error.errors).map(err => err.message);
       return validationErrorResponse(res, validationErrors);
     }
-
     return errorResponse(res, 'Error creating product', 500, error.message);
   }
 };
@@ -206,63 +184,31 @@ const createProduct = async (req, res) => {
 const updateProduct = async (req, res) => {
   try {
     const { name, summary, description, stockUnit, price, discountPercentage, categoryId, tags, isActive } = req.body;
-
     const currentProduct = await Product.findById(req.params.id);
     if (!currentProduct) {
       return notFoundResponse(res, 'Product not found');
     }
-
-    // Handle multiple image uploads
     let coverImage = currentProduct.coverImage;
     let additionalImages = currentProduct.images;
-
-    // Process cover image
+    // Process cover image (file upload)
     if (req.files && req.files.coverImage && req.files.coverImage[0]) {
-      try {
-        // Delete old cover image files
-        if (currentProduct.coverImage) {
-          deleteProductImages(currentProduct.coverImage);
-        }
-
-        const imageSizes = await generateProductImages(req.files.coverImage[0].path, req.files.coverImage[0].filename);
-        coverImage = imageSizes.original;
-      } catch (error) {
-        console.error('Error processing new cover image:', error);
-        return errorResponse(res, 'Error processing cover image', 400);
-      }
+      const file = req.files.coverImage[0];
+      const processedBuffer = await processImageBuffer(file.buffer, { format: 'jpeg', quality: 85 });
+      coverImage = await uploadBufferToS3(processedBuffer, 'image/jpeg');
     } else if (req.body.coverImage && req.body.coverImage !== currentProduct.coverImage) {
-      // If new image URL is provided in JSON body
-      deleteProductImages(currentProduct.coverImage);
       coverImage = req.body.coverImage;
     }
-
-    // Process additional images
+    // Process additional images (file upload)
     if (req.files && req.files.images && req.files.images.length > 0) {
-      try {
-        // Delete old additional images
-        if (currentProduct.images && currentProduct.images.length > 0) {
-          currentProduct.images.forEach(img => deleteProductImages(img));
-        }
-
-        // Process new additional images
-        additionalImages = [];
-        for (const file of req.files.images) {
-          const imageSizes = await generateProductImages(file.path, file.filename);
-          additionalImages.push(imageSizes.original);
-        }
-      } catch (error) {
-        console.error('Error processing additional images:', error);
-        return errorResponse(res, 'Error processing additional images', 400);
+      additionalImages = [];
+      for (const file of req.files.images) {
+        const processedBuffer = await processImageBuffer(file.buffer, { format: 'jpeg', quality: 85 });
+        const imageUrl = await uploadBufferToS3(processedBuffer, 'image/jpeg');
+        additionalImages.push(imageUrl);
       }
     } else if (req.body.images) {
-      // If image URLs are provided in JSON body
-      // Delete old additional images
-      if (currentProduct.images && currentProduct.images.length > 0) {
-        currentProduct.images.forEach(img => deleteProductImages(img));
-      }
       additionalImages = JSON.parse(req.body.images);
     }
-
     const updatedProduct = await Product.findByIdAndUpdate(
       req.params.id,
       {
@@ -280,17 +226,7 @@ const updateProduct = async (req, res) => {
       },
       { new: true, runValidators: true }
     ).populate('categoryId', 'name');
-
-    // Add responsive image URLs to response
-    const productObj = updatedProduct.toObject();
-    if (productObj.coverImage) {
-      productObj.coverImageSizes = createSrcSet(productObj.coverImage);
-    }
-    if (productObj.images && productObj.images.length > 0) {
-      productObj.imagesSizes = productObj.images.map(img => createSrcSet(img));
-    }
-
-    return successResponse(res, productObj, 'Product updated successfully');
+    return successResponse(res, updatedProduct, 'Product updated successfully');
   } catch (error) {
     console.error('Error updating product:', error);
     return errorResponse(res, 'Error updating product', 500, error.message);
@@ -304,20 +240,8 @@ const deleteProduct = async (req, res) => {
     if (!product) {
       return notFoundResponse(res, 'Product not found');
     }
-
-    // Delete all image files
-    if (product.coverImage) {
-      deleteProductImages(product.coverImage);
-    }
-
-    // Delete additional images
-    if (product.images && product.images.length > 0) {
-      product.images.forEach(img => deleteProductImages(img));
-    }
-
     // Soft delete by setting isActive to false
     await Product.findByIdAndUpdate(req.params.id, { isActive: false });
-
     return successResponse(res, null, 'Product deleted successfully');
   } catch (error) {
     console.error('Error deleting product:', error);
