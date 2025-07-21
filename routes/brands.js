@@ -13,10 +13,10 @@ const {
 
 // Public routes (read-only)
 router.get('/', validatePagination, getAllBrands);
+router.get('/stats', authenticateToken, requireAdmin, getBrandStats);
 router.get('/:id', validateObjectId, getBrandById);
 
 // Admin-only routes
-router.get('/stats', authenticateToken, requireAdmin, getBrandStats);
 router.post('/', authenticateToken, requireAdmin, createBrand);
 router.put('/:id', authenticateToken, requireAdmin, validateObjectId, updateBrand);
 router.delete('/:id', authenticateToken, requireAdmin, validateObjectId, deleteBrand);

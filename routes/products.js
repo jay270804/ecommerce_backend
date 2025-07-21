@@ -19,8 +19,8 @@ const {
 
 // Public routes (product browsing) - No authentication required
 router.get("/", validatePagination, getAllProducts);
-router.get("/:id", validateObjectId, getProductById);
 router.get("/filters/metadata", getFilterMetadata);
+router.get("/:id", validateObjectId, getProductById);
 
 // Admin-only routes
 router.post(

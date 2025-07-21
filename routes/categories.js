@@ -13,10 +13,10 @@ const {
 
 // Public routes (read-only)
 router.get('/', validatePagination, getAllCategories);
+router.get('/stats', authenticateToken, requireAdmin, getCategoryStats);
 router.get('/:id', validateObjectId, getCategoryById);
 
 // Admin-only routes
-router.get('/stats', authenticateToken, requireAdmin, getCategoryStats);
 router.post('/', authenticateToken, requireAdmin, createCategory);
 router.put('/:id', authenticateToken, requireAdmin, validateObjectId, updateCategory);
 router.delete('/:id', authenticateToken, requireAdmin, validateObjectId, deleteCategory);

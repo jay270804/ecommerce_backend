@@ -15,13 +15,10 @@ router.use(authenticateToken, requireAdmin);
 
 // Get all users with pagination and filtering
 router.get('/', validatePagination, getAllUsers);
-
 // Get user statistics
 router.get('/stats', getUserStats);
-
 // Get user by ID
 router.get('/:id', validateObjectId, getUserById);
-
 // Update user
 // TODO: below api and PUT /profile Api both carry same function ?
 router.put('/:id', validateObjectId, updateUser);
