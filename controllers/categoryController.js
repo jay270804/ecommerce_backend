@@ -4,12 +4,15 @@ const Brand = require('../models/Brand');
 // Get all categories
 const getAllCategories = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search } = req.query;
+    const { page = 1, limit = 10, search, brand } = req.query;
 
     // Build filter object
     const filter = {};
     if (search) {
       filter.name = { $regex: search, $options: 'i' };
+    }
+    if (brand) {
+      filter.brand = brand;
     }
 
     // Calculate pagination
