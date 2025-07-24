@@ -3,7 +3,7 @@ const Category = require('../models/Category');
 const { successResponse, errorResponse, validationErrorResponse, notFoundResponse } = require('../utils/response');
 const { processImageBuffer } = require('../utils/imageProcessor');
 const { v4: uuidv4 } = require('uuid');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 
 // Configure the S3 client
 const s3Client = new S3Client({
@@ -26,6 +26,50 @@ const uploadBufferToS3 = async (buffer, mimetype, folder = 'products') => {
   });
   await s3Client.send(command);
   return `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+};
+
+const listS3Images = async (req, res) => {
+  try {
+    const command = new ListObjectsV2Command({
+      Bucket: process.env.AWS_S3_BUCKET_NAME,
+      Prefix: 'products/', // Only list files in the 'products' folder
+    });
+
+    const response = await s3Client.send(command);
+
+    const images = (response.Contents || []).map(item => ({
+      key: item.Key,
+      url: `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${item.Key}`,
+      lastModified: item.LastModified,
+      size: item.Size,
+    }));
+
+    return successResponse(res, images, 'Images fetched successfully');
+  } catch (error) {
+    console.error('Error fetching images from S3:', error);
+    return errorResponse(res, 'Error fetching images', 500, error.message);
+  }
+};
+
+// Helper to delete an object from S3 by key or URL
+const deleteS3Image = async (imageUrlOrKey) => {
+  try {
+    let key = imageUrlOrKey;
+    // If a full URL is provided, extract the key
+    if (key.startsWith('http')) {
+      const url = new URL(key);
+      key = url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname;
+    }
+    const command = new DeleteObjectCommand({
+      Bucket: process.env.AWS_S3_BUCKET_NAME,
+      Key: key,
+    });
+    await s3Client.send(command);
+    return true;
+  } catch (error) {
+    console.error('Error deleting image from S3:', error);
+    return false;
+  }
 };
 
 // DB should be accessed only at this layer not on routes layer.
@@ -190,16 +234,32 @@ const updateProduct = async (req, res) => {
     }
     let coverImage = currentProduct.coverImage;
     let additionalImages = currentProduct.images;
+    let oldCoverImage = currentProduct.coverImage;
+    let oldImages = currentProduct.images;
     // Process cover image (file upload)
     if (req.files && req.files.coverImage && req.files.coverImage[0]) {
       const file = req.files.coverImage[0];
       const processedBuffer = await processImageBuffer(file.buffer, { format: 'jpeg', quality: 85 });
       coverImage = await uploadBufferToS3(processedBuffer, 'image/jpeg');
+      // Delete old cover image if changed
+      if (oldCoverImage && oldCoverImage !== coverImage) {
+        await deleteS3Image(oldCoverImage);
+      }
     } else if (req.body.coverImage && req.body.coverImage !== currentProduct.coverImage) {
       coverImage = req.body.coverImage;
+      // Delete old cover image if changed
+      if (oldCoverImage && oldCoverImage !== coverImage) {
+        await deleteS3Image(oldCoverImage);
+      }
     }
     // Process additional images (file upload)
     if (req.files && req.files.images && req.files.images.length > 0) {
+      // Delete all old images if new ones are uploaded
+      if (oldImages && oldImages.length > 0) {
+        for (const img of oldImages) {
+          await deleteS3Image(img);
+        }
+      }
       additionalImages = [];
       for (const file of req.files.images) {
         const processedBuffer = await processImageBuffer(file.buffer, { format: 'jpeg', quality: 85 });
@@ -207,7 +267,16 @@ const updateProduct = async (req, res) => {
         additionalImages.push(imageUrl);
       }
     } else if (req.body.images) {
-      additionalImages = JSON.parse(req.body.images);
+      const newImages = JSON.parse(req.body.images);
+      // Delete images that are no longer present
+      if (oldImages && oldImages.length > 0) {
+        for (const img of oldImages) {
+          if (!newImages.includes(img)) {
+            await deleteS3Image(img);
+          }
+        }
+      }
+      additionalImages = newImages;
     }
     const updatedProduct = await Product.findByIdAndUpdate(
       req.params.id,
@@ -239,6 +308,15 @@ const deleteProduct = async (req, res) => {
     const product = await Product.findById(req.params.id);
     if (!product) {
       return notFoundResponse(res, 'Product not found');
+    }
+    // Delete cover image and additional images from S3
+    if (product.coverImage) {
+      await deleteS3Image(product.coverImage);
+    }
+    if (product.images && product.images.length > 0) {
+      for (const img of product.images) {
+        await deleteS3Image(img);
+      }
     }
     // Soft delete by setting isActive to false
     await Product.findByIdAndUpdate(req.params.id, { isActive: false });
@@ -282,5 +360,8 @@ module.exports = {
   createProduct,
   updateProduct,
   deleteProduct,
-  getFilterMetadata
+  getFilterMetadata,
+  listS3Images,
+  deleteS3Image,
+  uploadBufferToS3 // Export for use in routes
 };

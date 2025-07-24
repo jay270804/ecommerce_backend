@@ -15,11 +15,14 @@ const {
   updateProduct,
   deleteProduct,
   getFilterMetadata,
+  listS3Images,
+  deleteS3Image
 } = require("../controllers/productController");
 
 // Public routes (product browsing) - No authentication required
 router.get("/", validatePagination, getAllProducts);
 router.get("/filters/metadata", getFilterMetadata);
+router.get("/s3-images", authenticateToken, requireAdmin, listS3Images);
 router.get("/:id", validateObjectId, getProductById);
 
 // Admin-only routes
@@ -36,33 +39,27 @@ router.post(
           message: "No image file provided",
         });
       }
-
-      // Generate multiple image sizes
-      const imageSizes = await generateProductImages(req.file.path, req.file.filename);
-
-      // Create responsive image URLs
-      const responsiveImages = createSrcSet(imageSizes.original);
-
+      // Use the same logic as in createProduct for S3 upload
+      const { processImageBuffer } = require("../utils/imageProcessor");
+      const { uploadBufferToS3 } = require("../controllers/productController");
+      // In-memory processing (compression)
+      const processedBuffer = await processImageBuffer(req.file.buffer, { format: "jpeg", quality: 85 });
+      const s3Url = await uploadBufferToS3(processedBuffer, "image/jpeg");
       res.json({
         success: true,
-        message: "Image uploaded and processed successfully",
+        message: "Image uploaded to S3 successfully",
         data: {
-          original: imageSizes.original,
-          thumbnail: imageSizes.thumbnail,
-          small: imageSizes.small,
-          medium: imageSizes.medium,
-          large: imageSizes.large,
-          urls: responsiveImages,
+          url: s3Url,
           originalName: req.file.originalname,
           fileSize: req.file.size,
           mimeType: req.file.mimetype,
         },
       });
     } catch (error) {
-      console.error("Error uploading image:", error);
+      console.error("Error uploading image to S3:", error);
       res.status(500).json({
         success: false,
-        message: "Error uploading image",
+        message: "Error uploading image to S3",
         error: error.message,
       });
     }
@@ -102,6 +99,25 @@ router.delete(
   requireAdmin,
   validateObjectId,
   deleteProduct
+);
+
+// Add this route for deleting an S3 image (admin only)
+router.delete(
+  '/s3-images/:key',
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    const key = decodeURIComponent(req.params.key);
+    if (!key) {
+      return res.status(400).json({ success: false, message: 'Image key required' });
+    }
+    const result = await deleteS3Image(key);
+    if (result) {
+      return res.json({ success: true, message: 'Image deleted from S3' });
+    } else {
+      return res.status(500).json({ success: false, message: 'Failed to delete image from S3' });
+    }
+  }
 );
 
 module.exports = router;
