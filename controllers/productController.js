@@ -1,9 +1,19 @@
-const Product = require('../models/Product');
-const Category = require('../models/Category');
-const { successResponse, errorResponse, validationErrorResponse, notFoundResponse } = require('../utils/response');
-const { processImageBuffer } = require('../utils/imageProcessor');
-const { v4: uuidv4 } = require('uuid');
-const { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const Product = require("../models/Product");
+const Category = require("../models/Category");
+const {
+  successResponse,
+  errorResponse,
+  validationErrorResponse,
+  notFoundResponse,
+} = require("../utils/response");
+const { processImageBuffer } = require("../utils/imageProcessor");
+const { v4: uuidv4 } = require("uuid");
+const {
+  S3Client,
+  PutObjectCommand,
+  ListObjectsV2Command,
+  DeleteObjectCommand,
+} = require("@aws-sdk/client-s3");
 
 // Configure the S3 client
 const s3Client = new S3Client({
@@ -15,8 +25,8 @@ const s3Client = new S3Client({
 });
 
 // Helper to upload a buffer to S3 and return the public URL
-const uploadBufferToS3 = async (buffer, mimetype, folder = 'products') => {
-  const ext = mimetype.split('/')[1] || 'jpg';
+const uploadBufferToS3 = async (buffer, mimetype, folder = "products") => {
+  const ext = mimetype.split("/")[1] || "jpg";
   const key = `${folder}/${uuidv4()}.${ext}`;
   const command = new PutObjectCommand({
     Bucket: process.env.AWS_S3_BUCKET_NAME,
@@ -32,22 +42,22 @@ const listS3Images = async (req, res) => {
   try {
     const command = new ListObjectsV2Command({
       Bucket: process.env.AWS_S3_BUCKET_NAME,
-      Prefix: 'products/', // Only list files in the 'products' folder
+      Prefix: "products/", // Only list files in the 'products' folder
     });
 
     const response = await s3Client.send(command);
 
-    const images = (response.Contents || []).map(item => ({
+    const images = (response.Contents || []).map((item) => ({
       key: item.Key,
       url: `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${item.Key}`,
       lastModified: item.LastModified,
       size: item.Size,
     }));
 
-    return successResponse(res, images, 'Images fetched successfully');
+    return successResponse(res, images, "Images fetched successfully");
   } catch (error) {
-    console.error('Error fetching images from S3:', error);
-    return errorResponse(res, 'Error fetching images', 500, error.message);
+    console.error("Error fetching images from S3:", error);
+    return errorResponse(res, "Error fetching images", 500, error.message);
   }
 };
 
@@ -56,9 +66,9 @@ const deleteS3Image = async (imageUrlOrKey) => {
   try {
     let key = imageUrlOrKey;
     // If a full URL is provided, extract the key
-    if (key.startsWith('http')) {
+    if (key.startsWith("http")) {
       const url = new URL(key);
-      key = url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname;
+      key = url.pathname.startsWith("/") ? url.pathname.slice(1) : url.pathname;
     }
     const command = new DeleteObjectCommand({
       Bucket: process.env.AWS_S3_BUCKET_NAME,
@@ -67,7 +77,7 @@ const deleteS3Image = async (imageUrlOrKey) => {
     await s3Client.send(command);
     return true;
   } catch (error) {
-    console.error('Error deleting image from S3:', error);
+    console.error("Error deleting image from S3:", error);
     return false;
   }
 };
@@ -82,9 +92,9 @@ const getAllProducts = async (req, res) => {
       categoryId,
       minPrice,
       maxPrice,
-      sortBy = 'createdAt',
-      sortOrder = 'desc',
-      search
+      sortBy = "createdAt",
+      sortOrder = "desc",
+      search,
     } = req.query;
 
     // Build filter object
@@ -97,81 +107,110 @@ const getAllProducts = async (req, res) => {
     }
     if (search) {
       filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-        { tags: { $in: [new RegExp(search, 'i')] } }
+        { name: { $regex: search, $options: "i" } },
+        { description: { $regex: search, $options: "i" } },
+        { tags: { $in: [new RegExp(search, "i")] } },
       ];
     }
 
     // Build sort object
     const sort = {};
-    sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
+    sort[sortBy] = sortOrder === "desc" ? -1 : 1;
 
     // Calculate pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     // Execute query with filtering, sorting, and pagination
     const products = await Product.find(filter)
-      .populate('categoryId', 'name')
+      .populate({
+        path: "categoryId",
+        select: "name brand", // Select the 'brand' field from the category
+        populate: {
+          path: "brand", // Populate the 'brand' field within the category
+          select: "name", // Only select the brand's name
+        },
+      })
       .sort(sort)
       .skip(skip)
       .limit(parseInt(limit));
 
     // Remove responsive image URL logic
-    const productsWithImages = products.map(product => product.toObject());
+    const productsWithImages = products.map((product) => product.toObject());
 
     const totalProducts = await Product.countDocuments(filter);
     const totalPages = Math.ceil(totalProducts / parseInt(limit));
-    return successResponse(res, {
-      products: productsWithImages,
-      pagination: {
-        currentPage: parseInt(page),
-        totalPages,
-        totalProducts,
-        hasNextPage: parseInt(page) < totalPages,
-        hasPrevPage: parseInt(page) > 1
-      }
-    }, 'Products fetched successfully');
+    return successResponse(
+      res,
+      {
+        products: productsWithImages,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalProducts,
+          hasNextPage: parseInt(page) < totalPages,
+          hasPrevPage: parseInt(page) > 1,
+        },
+      },
+      "Products fetched successfully"
+    );
   } catch (error) {
-    console.error('Error fetching products:', error);
-    return errorResponse(res, 'Error fetching products', 500, error.message);
+    console.error("Error fetching products:", error);
+    return errorResponse(res, "Error fetching products", 500, error.message);
   }
 };
 
 // Get product by ID
 const getProductById = async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id)
-      .populate('categoryId', 'name');
+    const product = await Product.findById(req.params.id).populate({
+      path: "categoryId",
+      select: "name brand", // Select the 'brand' field from the category
+      populate: {
+        path: "brand", // Populate the 'brand' field within the category
+        select: "name", // Only select the brand's name
+      },
+    });
 
     if (!product) {
-      return notFoundResponse(res, 'Product not found');
+      return notFoundResponse(res, "Product not found");
     }
 
     // Remove responsive image URL logic
     const productObj = product.toObject();
 
-    return successResponse(res, productObj, 'Product fetched successfully');
+    return successResponse(res, productObj, "Product fetched successfully");
   } catch (error) {
-    console.error('Error fetching product:', error);
-    return errorResponse(res, 'Error fetching product', 500, error.message);
+    console.error("Error fetching product:", error);
+    return errorResponse(res, "Error fetching product", 500, error.message);
   }
 };
 // QUERY: I want to upload coverimage and other images all as file, currently only coverimage is sent as file, images are sent as array of strings. (I need a uniform solution through which I can upload images while creating product through admin panel client)
 // Create new product
 const createProduct = async (req, res) => {
   try {
-    const { name, summary, description, stockUnit, price, discountPercentage, categoryId, tags } = req.body;
+    const {
+      name,
+      summary,
+      description,
+      stockUnit,
+      price,
+      discountPercentage,
+      categoryId,
+      tags,
+    } = req.body;
 
-    let coverImage = '';
+    let coverImage = "";
     let additionalImages = [];
 
     // Process cover image (file upload)
     if (req.files && req.files.coverImage && req.files.coverImage[0]) {
       const file = req.files.coverImage[0];
       // In-memory processing (compression)
-      const processedBuffer = await processImageBuffer(file.buffer, { format: 'jpeg', quality: 85 });
-      coverImage = await uploadBufferToS3(processedBuffer, 'image/jpeg');
+      const processedBuffer = await processImageBuffer(file.buffer, {
+        format: "jpeg",
+        quality: 85,
+      });
+      coverImage = await uploadBufferToS3(processedBuffer, "image/jpeg");
     } else if (req.body.coverImage) {
       coverImage = req.body.coverImage;
     }
@@ -179,8 +218,11 @@ const createProduct = async (req, res) => {
     // Process additional images (file upload)
     if (req.files && req.files.images && req.files.images.length > 0) {
       for (const file of req.files.images) {
-        const processedBuffer = await processImageBuffer(file.buffer, { format: 'jpeg', quality: 85 });
-        const imageUrl = await uploadBufferToS3(processedBuffer, 'image/jpeg');
+        const processedBuffer = await processImageBuffer(file.buffer, {
+          format: "jpeg",
+          quality: 85,
+        });
+        const imageUrl = await uploadBufferToS3(processedBuffer, "image/jpeg");
         additionalImages.push(imageUrl);
       }
     } else if (req.body.images) {
@@ -189,13 +231,20 @@ const createProduct = async (req, res) => {
 
     // Validate required fields
     if (!name || !description || !coverImage || !price || !categoryId) {
-      return validationErrorResponse(res, ['Missing required fields: name, description, coverImage, price, categoryId']);
+      return validationErrorResponse(res, [
+        "Missing required fields: name, description, coverImage, price, categoryId",
+      ]);
     }
     if (price <= 0) {
-      return validationErrorResponse(res, ['Price must be greater than 0']);
+      return validationErrorResponse(res, ["Price must be greater than 0"]);
     }
-    if (discountPercentage && (discountPercentage < 0 || discountPercentage > 100)) {
-      return validationErrorResponse(res, ['Discount percentage must be between 0 and 100']);
+    if (
+      discountPercentage &&
+      (discountPercentage < 0 || discountPercentage > 100)
+    ) {
+      return validationErrorResponse(res, [
+        "Discount percentage must be between 0 and 100",
+      ]);
     }
 
     const product = new Product({
@@ -208,29 +257,48 @@ const createProduct = async (req, res) => {
       price,
       discountPercentage: discountPercentage || 0,
       categoryId,
-      tags: tags ? JSON.parse(tags) : []
+      tags: tags ? JSON.parse(tags) : [],
     });
 
     const savedProduct = await product.save();
-    await Category.findByIdAndUpdate(categoryId, { $push: { products: savedProduct._id } });
-    return successResponse(res, savedProduct, 'Product created successfully', 201);
+    await Category.findByIdAndUpdate(categoryId, {
+      $push: { products: savedProduct._id },
+    });
+    return successResponse(
+      res,
+      savedProduct,
+      "Product created successfully",
+      201
+    );
   } catch (error) {
-    console.error('Error creating product:', error);
-    if (error.name === 'ValidationError') {
-      const validationErrors = Object.values(error.errors).map(err => err.message);
+    console.error("Error creating product:", error);
+    if (error.name === "ValidationError") {
+      const validationErrors = Object.values(error.errors).map(
+        (err) => err.message
+      );
       return validationErrorResponse(res, validationErrors);
     }
-    return errorResponse(res, 'Error creating product', 500, error.message);
+    return errorResponse(res, "Error creating product", 500, error.message);
   }
 };
 // QUERY: In the postman collection you provided, the POST and PUT apis have formdata in body, then why you are destructuring using `req.body`? Also in PUT api, I want to update images using file not string (for reference see issue above `createProduct` function)
 // Update product
 const updateProduct = async (req, res) => {
   try {
-    const { name, summary, description, stockUnit, price, discountPercentage, categoryId, tags, isActive } = req.body;
+    const {
+      name,
+      summary,
+      description,
+      stockUnit,
+      price,
+      discountPercentage,
+      categoryId,
+      tags,
+      isActive,
+    } = req.body;
     const currentProduct = await Product.findById(req.params.id);
     if (!currentProduct) {
-      return notFoundResponse(res, 'Product not found');
+      return notFoundResponse(res, "Product not found");
     }
     let coverImage = currentProduct.coverImage;
     let additionalImages = currentProduct.images;
@@ -239,13 +307,19 @@ const updateProduct = async (req, res) => {
     // Process cover image (file upload)
     if (req.files && req.files.coverImage && req.files.coverImage[0]) {
       const file = req.files.coverImage[0];
-      const processedBuffer = await processImageBuffer(file.buffer, { format: 'jpeg', quality: 85 });
-      coverImage = await uploadBufferToS3(processedBuffer, 'image/jpeg');
+      const processedBuffer = await processImageBuffer(file.buffer, {
+        format: "jpeg",
+        quality: 85,
+      });
+      coverImage = await uploadBufferToS3(processedBuffer, "image/jpeg");
       // Delete old cover image if changed
       if (oldCoverImage && oldCoverImage !== coverImage) {
         await deleteS3Image(oldCoverImage);
       }
-    } else if (req.body.coverImage && req.body.coverImage !== currentProduct.coverImage) {
+    } else if (
+      req.body.coverImage &&
+      req.body.coverImage !== currentProduct.coverImage
+    ) {
       coverImage = req.body.coverImage;
       // Delete old cover image if changed
       if (oldCoverImage && oldCoverImage !== coverImage) {
@@ -262,8 +336,11 @@ const updateProduct = async (req, res) => {
       }
       additionalImages = [];
       for (const file of req.files.images) {
-        const processedBuffer = await processImageBuffer(file.buffer, { format: 'jpeg', quality: 85 });
-        const imageUrl = await uploadBufferToS3(processedBuffer, 'image/jpeg');
+        const processedBuffer = await processImageBuffer(file.buffer, {
+          format: "jpeg",
+          quality: 85,
+        });
+        const imageUrl = await uploadBufferToS3(processedBuffer, "image/jpeg");
         additionalImages.push(imageUrl);
       }
     } else if (req.body.images) {
@@ -291,14 +368,14 @@ const updateProduct = async (req, res) => {
         discountPercentage,
         categoryId,
         tags: tags ? JSON.parse(tags) : currentProduct.tags,
-        isActive
+        isActive,
       },
       { new: true, runValidators: true }
-    ).populate('categoryId', 'name');
-    return successResponse(res, updatedProduct, 'Product updated successfully');
+    ).populate("categoryId", "name");
+    return successResponse(res, updatedProduct, "Product updated successfully");
   } catch (error) {
-    console.error('Error updating product:', error);
-    return errorResponse(res, 'Error updating product', 500, error.message);
+    console.error("Error updating product:", error);
+    return errorResponse(res, "Error updating product", 500, error.message);
   }
 };
 
@@ -307,7 +384,7 @@ const deleteProduct = async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
     if (!product) {
-      return notFoundResponse(res, 'Product not found');
+      return notFoundResponse(res, "Product not found");
     }
     // Delete cover image and additional images from S3
     if (product.coverImage) {
@@ -320,17 +397,17 @@ const deleteProduct = async (req, res) => {
     }
     // Soft delete by setting isActive to false
     await Product.findByIdAndUpdate(req.params.id, { isActive: false });
-    return successResponse(res, null, 'Product deleted successfully');
+    return successResponse(res, null, "Product deleted successfully");
   } catch (error) {
-    console.error('Error deleting product:', error);
-    return errorResponse(res, 'Error deleting product', 500, error.message);
+    console.error("Error deleting product:", error);
+    return errorResponse(res, "Error deleting product", 500, error.message);
   }
 };
 
 // Get filter metadata
 const getFilterMetadata = async (req, res) => {
   try {
-    const categories = await Product.distinct('categoryId');
+    const categories = await Product.distinct("categoryId");
 
     // Get price range
     const priceStats = await Product.aggregate([
@@ -338,19 +415,28 @@ const getFilterMetadata = async (req, res) => {
       {
         $group: {
           _id: null,
-          minPrice: { $min: '$price' },
-          maxPrice: { $max: '$price' }
-        }
-      }
+          minPrice: { $min: "$price" },
+          maxPrice: { $max: "$price" },
+        },
+      },
     ]);
 
-    return successResponse(res, {
-      categories: categories.sort(),
-      priceRange: priceStats[0] || { minPrice: 0, maxPrice: 0 }
-    }, 'Filter metadata fetched successfully');
+    return successResponse(
+      res,
+      {
+        categories: categories.sort(),
+        priceRange: priceStats[0] || { minPrice: 0, maxPrice: 0 },
+      },
+      "Filter metadata fetched successfully"
+    );
   } catch (error) {
-    console.error('Error fetching filter metadata:', error);
-    return errorResponse(res, 'Error fetching filter metadata', 500, error.message);
+    console.error("Error fetching filter metadata:", error);
+    return errorResponse(
+      res,
+      "Error fetching filter metadata",
+      500,
+      error.message
+    );
   }
 };
 
@@ -363,5 +449,5 @@ module.exports = {
   getFilterMetadata,
   listS3Images,
   deleteS3Image,
-  uploadBufferToS3 // Export for use in routes
+  uploadBufferToS3, // Export for use in routes
 };
